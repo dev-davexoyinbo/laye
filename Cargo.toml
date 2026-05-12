@@ -6,3 +6,4 @@ description = "A framework-agnostic role and permission based access control lib
 license = "MIT"
 
 [dependencies]
+thiserror = "2"
