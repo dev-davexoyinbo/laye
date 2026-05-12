@@ -116,7 +116,9 @@ pub type CustomFn = Arc<dyn Fn(Option<&dyn Principal>) -> bool + Send + Sync>;
 #[derive(Clone)]
 pub enum AccessRule {
     Role(String),
+    NotRole(String),        // passes when principal lacks the role
     Permission(String),
+    NotPermission(String),  // passes when principal lacks the permission
     Authenticated,
     Guest,   // passes for None OR is_authenticated() == false
     Custom(CustomFn),
@@ -145,6 +147,9 @@ impl AccessPolicy {
 | Principal present but lacks role/permission | `Forbidden` |
 | `Authenticated` rule, principal exists but `is_authenticated()` is false | `Unauthorized` |
 | `Guest` rule, principal is authenticated | `Forbidden` |
+| `NotRole`/`NotPermission`, principal is `None` | `Unauthorized` |
+| `NotRole`/`NotPermission`, principal has the named role/permission | `Forbidden` |
+| `NotRole`/`NotPermission`, principal lacks the named role/permission | `Authorized` |
 | `require_any`, all checks fail, principal present | `Forbidden` |
 | `require_any`, all checks fail, no principal | `Unauthorized` |
 
@@ -159,7 +164,7 @@ pub fn into_tower_layer<P: Principal + Clone + Send + Sync + 'static>(self) -> t
 
 ### Stage 3 Tests
 
-**File:** `tests/policy.rs` — 21 tests, all passing
+**File:** `tests/policy.rs` — 27 tests, all passing
 
 ```
 // AccessRule::Role
@@ -185,6 +190,14 @@ guest_rule_fails_for_authenticated_principal
 custom_rule_delegates_to_closure
 custom_rule_receives_none_for_missing_principal
 
+// AccessRule::NotRole / NotPermission
+not_role_passes_when_principal_lacks_role
+not_role_fails_when_principal_has_role
+not_role_fails_for_missing_principal
+not_permission_passes_when_principal_lacks_permission
+not_permission_fails_when_principal_has_permission
+absence_check_composes_with_presence_check
+
 // AccessPolicy AND mode
 require_all_passes_when_all_rules_pass
 require_all_fails_when_any_rule_fails
@@ -202,15 +215,22 @@ unauthenticated_request_yields_unauthorized_not_forbidden
 authenticated_without_role_yields_forbidden_not_unauthorized
 ```
 
-**`cargo check` and `cargo test` pass. 29 total tests (8 + 21).**
+**`cargo check` and `cargo test` pass. 35 total tests (8 + 27).**
 
 ---
 
-## Stage 4 — actix-web Middleware Helper (`feature = "actix-web"`)
+## Stage 4 — actix-web Middleware Helper (`feature = "actix-web"`) ✓ DONE
 
 **Goal:** A `Transform` + `Service` middleware that reads a `P: Principal` from request extensions and enforces an `AccessPolicy`.
 
 **Files:** `src/actix/mod.rs`, `src/actix/layer.rs`, `src/actix/extractor.rs`
+
+**What was done:**
+- Implemented `PolicyMiddlewareFactory<P>` and `PolicyMiddleware<S, P>` in `src/actix/layer.rs`
+- Implemented `AuthPrincipal<P>` and `MaybeAuthPrincipal<P>` extractors in `src/actix/extractor.rs`
+- Re-exported everything from `src/actix/mod.rs`
+- Added `into_actix_middleware<P>()` convenience method on `AccessPolicy` (gated on `#[cfg(feature = "actix-web")]`)
+- Created `tests/actix_middleware.rs` with 13 passing tests
 
 ### Middleware (`src/actix/layer.rs`)
 ```rust
@@ -223,74 +243,82 @@ pub struct PolicyMiddlewareFactory<P> {
 // Produces PolicyMiddleware<S, P>
 
 pub struct PolicyMiddleware<S, P> {
-    service: S,
+    service: Rc<S>,
     policy: AccessPolicy,
     _marker: PhantomData<P>,
 }
 
 // Service::call:
-//   1. reads req.extensions().get::<P>()
-//   2. calls policy.check(principal.as_deref())
-//   3. Ok  → forwards to inner service
-//   4. Unauthorized → ErrorUnauthorized
-//   5. Forbidden    → ErrorForbidden
+//   1. reads req.extensions().get::<P>().cloned()
+//   2. calls policy.check(principal.as_ref().map(|p| p as &dyn Principal))
+//   3. Authorized    → forwards to inner service
+//   4. Unauthorized  → ErrorUnauthorized ("Unauthorized")
+//   5. Forbidden     → ErrorForbidden ("Forbidden")
 ```
 
-`Future` type: `LocalBoxFuture<'static, ...>` (actix is single-threaded).
+`Future` type: `LocalBoxFuture<'static, ...>` (actix is single-threaded). Inner service wrapped in `Rc` to satisfy `'static` requirement in the future.
 
 ### Extractors (`src/actix/extractor.rs`)
 ```rust
-pub struct AuthPrincipal<P>(pub P);        // 401 if missing from extensions
-pub struct MaybeAuthPrincipal<P>(pub Option<P>);  // never fails
+pub struct AuthPrincipal<P>(pub P);              // 401 if missing from extensions
+pub struct MaybeAuthPrincipal<P>(pub Option<P>); // never fails
 
-// Both implement FromRequest, reading P from extensions
+// Both implement FromRequest, cloning P out of request extensions
 ```
 
 **Design notes:**
-- Users insert `P` into extensions via their own global auth middleware. `laye` only reads it — no opinion on token format or DB.
-- `ErrorUnauthorized` / `ErrorForbidden` use actix's built-in helpers; users can override via a custom `ResponseError` impl.
+- Users insert `P` into extensions via their own global auth middleware (e.g. a JWT decode layer). `laye` only reads it — no opinion on token format or DB.
+- `ErrorUnauthorized` / `ErrorForbidden` use actix's built-in helpers; body is a plain string.
+- `P: Clone` is required so the extractor can hand ownership to the handler without consuming the extension map.
 
 ### Stage 4 Tests
 
-**File:** `tests/actix_middleware.rs` (requires `#[cfg(feature = "actix-web")]`)
+**File:** `tests/actix_middleware.rs` — 13 tests, all passing (requires `#[cfg(feature = "actix-web")]`)
 
-Uses `actix_web::test` utilities to spin up a minimal `App`.
+Uses `actix_web::test::{init_service, call_service, TestRequest}` to spin up a minimal `App`. Extensions are inserted via `wrap_fn`.
 
-```rust
-// Helper: build App with a fake "set extensions" middleware that inserts TestUser,
-// then wraps a dummy handler with PolicyMiddlewareFactory.
-
-#[actix_web::test]
-async fn middleware_allows_request_when_policy_passes()
-// → inserts admin TestUser, wraps with Role("admin") policy, expects 200
-
-#[actix_web::test]
-async fn middleware_returns_403_when_role_missing()
-// → inserts TestUser with no roles, expects 403
-
-#[actix_web::test]
-async fn middleware_returns_401_when_no_principal_in_extensions()
-// → no extension inserted, policy requires Authenticated, expects 401
-
-#[actix_web::test]
-async fn auth_principal_extractor_injects_principal_into_handler()
-// → extension present, AuthPrincipal<TestUser> received correctly
-
-#[actix_web::test]
-async fn auth_principal_extractor_returns_401_when_missing()
-
-#[actix_web::test]
-async fn maybe_auth_principal_returns_some_when_present()
-
-#[actix_web::test]
-async fn maybe_auth_principal_returns_none_when_absent()
-
-#[actix_web::test]
-async fn and_policy_blocks_when_one_condition_fails()
-
-#[actix_web::test]
-async fn or_policy_allows_when_one_condition_passes()
 ```
+middleware_allows_request_when_policy_passes
+// → admin TestUser in extensions, Role("admin") policy → 200
+
+middleware_returns_403_when_role_missing
+// → TestUser with no roles, Role("admin") policy → 403
+
+middleware_returns_401_when_no_principal_in_extensions
+// → no extension, Authenticated policy → 401
+
+auth_principal_extractor_injects_principal_into_handler
+// → AuthPrincipal<TestUser> received in handler, asserts has_role("user") → 200
+
+auth_principal_extractor_returns_401_when_missing
+// → no extension, AuthPrincipal extractor used → 401
+
+maybe_auth_principal_returns_some_when_present
+// → extension present, MaybeAuthPrincipal is Some → 200
+
+maybe_auth_principal_returns_none_when_absent
+// → no extension, Guest policy, MaybeAuthPrincipal is None → 200
+
+and_policy_blocks_when_one_condition_fails
+// → Authenticated + Role("admin"), user only has "user" role → 403
+
+or_policy_allows_when_one_condition_passes
+// → Role("admin") | Role("editor"), user has "editor" → 200
+
+not_role_allows_user_without_banned_role
+// → Authenticated + NotRole("banned"), user has "editor" only → 200
+
+not_role_blocks_user_with_banned_role
+// → Authenticated + NotRole("banned"), user has "editor" + "banned" → 403
+
+not_permission_allows_user_without_restricted_permission
+// → Authenticated + NotPermission("delete"), user has "read" only → 200
+
+not_permission_blocks_user_with_restricted_permission
+// → Authenticated + NotPermission("delete"), user has "read" + "delete" → 403
+```
+
+**`cargo test --features actix-web` passes. 48 total tests (8 + 27 + 13).**
 
 ---
 
