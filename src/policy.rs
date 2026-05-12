@@ -84,6 +84,14 @@ impl AccessPolicy {
             }
         }
     }
+
+    #[cfg(feature = "actix-web")]
+    pub fn into_actix_middleware<P>(self) -> crate::actix::PolicyMiddlewareFactory<P>
+    where
+        P: crate::principal::Principal + Clone + 'static,
+    {
+        crate::actix::PolicyMiddlewareFactory::new(self)
+    }
 }
 
 fn eval_check(check: &PolicyCheck, principal: Option<&dyn Principal>) -> LayeCheckResult {

@@ -5,4 +5,9 @@ edition = "2024"
 description = "A framework-agnostic role and permission based access control library"
 license = "MIT"
 
+[features]
+default = []
+actix-web = ["dep:actix-web"]
+
 [dependencies]
+actix-web = { version = "4", optional = true }
