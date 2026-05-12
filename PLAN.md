@@ -25,22 +25,28 @@
 
 ---
 
-## Stage 2 — Core Traits and Types
+## Stage 2 — Core Traits and Types ✓ DONE
 
-**Goal:** Define the `Principal` trait and the `AccessError` type. No framework dependencies.
+**Goal:** Define the `Principal` trait and the `LayeError` type. No framework dependencies.
 
 **Files:** `src/error.rs`, `src/principal.rs`
+
+**What was done:**
+- Added `thiserror = "2"` to `Cargo.toml`
+- Implemented `LayeError` enum in `src/error.rs` (renamed from `AccessError` during implementation)
+- Implemented `Principal` trait in `src/principal.rs` — object-safe, no generics
+- Created `tests/principal.rs` with 8 passing tests, all asserts include failure messages
 
 ### `src/error.rs`
 ```rust
 use thiserror::Error;
 
 #[derive(Debug, Clone, Error)]
-pub enum AccessError {
-    /// No identity — maps to HTTP 401.
+pub enum LayeError {
+    /// Maps to HTTP 401.
     #[error("Unauthorized")]
     Unauthorized,
-    /// Authenticated but insufficient rights — maps to HTTP 403.
+    /// Maps to HTTP 403.
     #[error("Forbidden")]
     Forbidden,
 }
@@ -51,7 +57,6 @@ pub enum AccessError {
 pub trait Principal {
     fn roles(&self) -> &[String];
     fn permissions(&self) -> &[String];
-    /// Returns true if this represents an authenticated identity.
     fn is_authenticated(&self) -> bool;
 
     fn has_role(&self, role: &str) -> bool {
@@ -69,20 +74,20 @@ pub trait Principal {
 
 ### Stage 2 Tests
 
-**File:** `tests/principal.rs`
+**File:** `tests/principal.rs` — 8 tests, all passing
 
-```rust
-// Minimal concrete impl used across all tests
-struct TestUser { roles: Vec<String>, permissions: Vec<String>, authenticated: bool }
-impl Principal for TestUser { ... }
-
-#[test] fn has_role_returns_true_for_matching_role()
-#[test] fn has_role_returns_false_for_missing_role()
-#[test] fn has_permission_returns_true_for_matching_permission()
-#[test] fn has_permission_returns_false_for_missing_permission()
-#[test] fn is_authenticated_reflects_field()
-#[test] fn dyn_principal_coercion_compiles()  // &user as &dyn Principal — verifies object safety
 ```
+has_role_returns_true_for_matching_role
+has_role_returns_false_for_missing_role
+has_role_returns_false_for_empty_roles
+has_permission_returns_true_for_matching_permission
+has_permission_returns_false_for_missing_permission
+has_permission_returns_false_for_empty_permissions
+is_authenticated_reflects_field
+dyn_principal_coercion_compiles   // &user as &dyn Principal — verifies object safety
+```
+
+**`cargo check` and `cargo test` pass.**
 
 ---
 
