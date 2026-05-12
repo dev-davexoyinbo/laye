@@ -31,33 +31,45 @@ fn make_user(roles: &[&str], permissions: &[&str], authenticated: bool) -> TestU
 #[test]
 fn has_role_returns_true_for_matching_role() {
     let user = make_user(&["admin"], &[], true);
-    assert!(user.has_role("admin"));
+    assert!(user.has_role("admin"), "User with role 'admin' should have role 'admin'");
 }
 
 #[test]
 fn has_role_returns_false_for_missing_role() {
     let user = make_user(&["admin"], &[], true);
-    assert!(!user.has_role("editor"));
+    assert!(!user.has_role("editor"), "User with only role 'admin' should not have role 'editor'");
+}
+
+#[test]
+fn has_role_returns_false_for_empty_roles() {
+    let user = make_user(&[], &[], true);
+    assert!(!user.has_role("admin"), "User with no roles should not have role 'admin'");
 }
 
 #[test]
 fn has_permission_returns_true_for_matching_permission() {
     let user = make_user(&[], &["read"], true);
-    assert!(user.has_permission("read"));
+    assert!(user.has_permission("read"), "User with permission 'read' should have permission 'read'");
 }
 
 #[test]
 fn has_permission_returns_false_for_missing_permission() {
     let user = make_user(&[], &["read"], true);
-    assert!(!user.has_permission("write"));
+    assert!(!user.has_permission("write"), "User with only permission 'read' should not have permission 'write'");
+}
+
+#[test]
+fn has_permission_returns_false_for_empty_permissions() {
+    let user = make_user(&[], &[], true);
+    assert!(!user.has_permission("read"), "User with no permissions should not have permission 'read'");
 }
 
 #[test]
 fn is_authenticated_reflects_field() {
     let auth = make_user(&[], &[], true);
     let guest = make_user(&[], &[], false);
-    assert!(auth.is_authenticated());
-    assert!(!guest.is_authenticated());
+    assert!(auth.is_authenticated(), "User constructed with authenticated=true should be authenticated");
+    assert!(!guest.is_authenticated(), "User constructed with authenticated=false should not be authenticated");
 }
 
 #[test]
