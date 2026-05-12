@@ -23,6 +23,14 @@ impl TestUser {
             authenticated: true,
         }
     }
+
+    fn with_permissions(roles: &[&str], permissions: &[&str]) -> Self {
+        Self {
+            roles: roles.iter().map(|s| s.to_string()).collect(),
+            permissions: permissions.iter().map(|s| s.to_string()).collect(),
+            authenticated: true,
+        }
+    }
 }
 
 impl Principal for TestUser {
@@ -188,6 +196,86 @@ async fn and_policy_blocks_when_one_condition_fails() {
     .await;
     let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
     assert_eq!(res.status(), 403, "AND policy should block when role condition fails");
+}
+
+#[actix_web::test]
+async fn not_role_allows_user_without_banned_role() {
+    let policy = AccessPolicy::require_all()
+        .add_rule(AccessRule::Authenticated)
+        .add_rule(AccessRule::NotRole("banned".into()));
+    let user = TestUser::new(&["editor"]);
+    let app = init_service(
+        App::new()
+            .wrap(policy.into_actix_middleware::<TestUser>())
+            .wrap_fn(move |req, srv| {
+                req.extensions_mut().insert(user.clone());
+                srv.call(req)
+            })
+            .route("/", web::get().to(|| async { HttpResponse::Ok().finish() })),
+    )
+    .await;
+    let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
+    assert_eq!(res.status(), 200, "user without banned role should get 200");
+}
+
+#[actix_web::test]
+async fn not_role_blocks_user_with_banned_role() {
+    let policy = AccessPolicy::require_all()
+        .add_rule(AccessRule::Authenticated)
+        .add_rule(AccessRule::NotRole("banned".into()));
+    let user = TestUser::new(&["editor", "banned"]);
+    let app = init_service(
+        App::new()
+            .wrap(policy.into_actix_middleware::<TestUser>())
+            .wrap_fn(move |req, srv| {
+                req.extensions_mut().insert(user.clone());
+                srv.call(req)
+            })
+            .route("/", web::get().to(|| async { HttpResponse::Ok().finish() })),
+    )
+    .await;
+    let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
+    assert_eq!(res.status(), 403, "user with banned role should get 403");
+}
+
+#[actix_web::test]
+async fn not_permission_allows_user_without_restricted_permission() {
+    let policy = AccessPolicy::require_all()
+        .add_rule(AccessRule::Authenticated)
+        .add_rule(AccessRule::NotPermission("delete".into()));
+    let user = TestUser::with_permissions(&[], &["read"]);
+    let app = init_service(
+        App::new()
+            .wrap(policy.into_actix_middleware::<TestUser>())
+            .wrap_fn(move |req, srv| {
+                req.extensions_mut().insert(user.clone());
+                srv.call(req)
+            })
+            .route("/", web::get().to(|| async { HttpResponse::Ok().finish() })),
+    )
+    .await;
+    let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
+    assert_eq!(res.status(), 200, "user without delete permission should get 200");
+}
+
+#[actix_web::test]
+async fn not_permission_blocks_user_with_restricted_permission() {
+    let policy = AccessPolicy::require_all()
+        .add_rule(AccessRule::Authenticated)
+        .add_rule(AccessRule::NotPermission("delete".into()));
+    let user = TestUser::with_permissions(&[], &["read", "delete"]);
+    let app = init_service(
+        App::new()
+            .wrap(policy.into_actix_middleware::<TestUser>())
+            .wrap_fn(move |req, srv| {
+                req.extensions_mut().insert(user.clone());
+                srv.call(req)
+            })
+            .route("/", web::get().to(|| async { HttpResponse::Ok().finish() })),
+    )
+    .await;
+    let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
+    assert_eq!(res.status(), 403, "user with delete permission should get 403");
 }
 
 #[actix_web::test]
