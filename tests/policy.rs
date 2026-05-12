@@ -124,13 +124,14 @@ fn authenticated_rule_fails_returning_unauthorized_for_none() {
 }
 
 #[test]
-fn authenticated_rule_fails_returning_forbidden_for_unauthenticated_principal() {
+fn authenticated_rule_fails_returning_unauthenticated_for_unauthenticated_principal() {
     let guest = make_guest();
     let policy = AccessPolicy::require_all().add_rule(AccessRule::Authenticated);
+
     assert_eq!(
         policy.check(Some(&guest)),
-        LayeCheckResult::Forbidden,
-        "unauthenticated principal should get Forbidden for Authenticated rule"
+        LayeCheckResult::Unauthorized,
+        "unauthenticated principal should get Unauthorized for Authenticated rule"
     );
 }
 
