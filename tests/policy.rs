@@ -206,6 +206,82 @@ fn custom_rule_receives_none_for_missing_principal() {
     );
 }
 
+// ── AccessRule::NotRole / NotPermission ───────────────────────────────────────
+
+#[test]
+fn not_role_passes_when_principal_lacks_role() {
+    let user = make_user(&["editor"], &[]);
+    let policy = AccessPolicy::require_all().add_rule(AccessRule::NotRole("banned".into()));
+    assert_eq!(
+        policy.check(Some(&user)),
+        LayeCheckResult::Authorized,
+        "user without 'banned' role should pass NotRole('banned') policy"
+    );
+}
+
+#[test]
+fn not_role_fails_when_principal_has_role() {
+    let user = make_user(&["banned"], &[]);
+    let policy = AccessPolicy::require_all().add_rule(AccessRule::NotRole("banned".into()));
+    assert_eq!(
+        policy.check(Some(&user)),
+        LayeCheckResult::Forbidden,
+        "user with 'banned' role should get Forbidden for NotRole('banned') policy"
+    );
+}
+
+#[test]
+fn not_role_fails_for_missing_principal() {
+    let policy = AccessPolicy::require_all().add_rule(AccessRule::NotRole("banned".into()));
+    assert_eq!(
+        policy.check(None),
+        LayeCheckResult::Unauthorized,
+        "missing principal should get Unauthorized for NotRole policy"
+    );
+}
+
+#[test]
+fn not_permission_passes_when_principal_lacks_permission() {
+    let user = make_user(&[], &["read"]);
+    let policy = AccessPolicy::require_all().add_rule(AccessRule::NotPermission("delete".into()));
+    assert_eq!(
+        policy.check(Some(&user)),
+        LayeCheckResult::Authorized,
+        "user without 'delete' permission should pass NotPermission('delete') policy"
+    );
+}
+
+#[test]
+fn not_permission_fails_when_principal_has_permission() {
+    let user = make_user(&[], &["delete"]);
+    let policy = AccessPolicy::require_all().add_rule(AccessRule::NotPermission("delete".into()));
+    assert_eq!(
+        policy.check(Some(&user)),
+        LayeCheckResult::Forbidden,
+        "user with 'delete' permission should get Forbidden for NotPermission('delete') policy"
+    );
+}
+
+#[test]
+fn absence_check_composes_with_presence_check() {
+    let user = make_user(&["editor"], &[]);
+    let policy = AccessPolicy::require_all()
+        .add_rule(AccessRule::Authenticated)
+        .add_rule(AccessRule::NotRole("banned".into()));
+    assert_eq!(
+        policy.check(Some(&user)),
+        LayeCheckResult::Authorized,
+        "authenticated user without banned role should pass combined presence+absence policy"
+    );
+
+    let banned = make_user(&["editor", "banned"], &[]);
+    assert_eq!(
+        policy.check(Some(&banned)),
+        LayeCheckResult::Forbidden,
+        "authenticated user with banned role should fail combined policy"
+    );
+}
+
 // ── AccessPolicy AND mode ─────────────────────────────────────────────────────
 
 #[test]

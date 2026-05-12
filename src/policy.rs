@@ -7,7 +7,9 @@ pub type CustomFn = Arc<dyn Fn(Option<&dyn Principal>) -> bool + Send + Sync>;
 #[derive(Clone)]
 pub enum AccessRule {
     Role(String),
+    NotRole(String),
     Permission(String),
+    NotPermission(String),
     Authenticated,
     Guest,
     Custom(CustomFn),
@@ -113,10 +115,30 @@ fn eval_rule(rule: &AccessRule, principal: Option<&dyn Principal>) -> LayeCheckR
                 }
             }
         },
+        AccessRule::NotRole(r) => match principal {
+            None => LayeCheckResult::Unauthorized,
+            Some(p) => {
+                if !p.has_role(r) {
+                    LayeCheckResult::Authorized
+                } else {
+                    LayeCheckResult::Forbidden
+                }
+            }
+        },
         AccessRule::Permission(p_str) => match principal {
             None => LayeCheckResult::Unauthorized,
             Some(p) => {
                 if p.has_permission(p_str) {
+                    LayeCheckResult::Authorized
+                } else {
+                    LayeCheckResult::Forbidden
+                }
+            }
+        },
+        AccessRule::NotPermission(p_str) => match principal {
+            None => LayeCheckResult::Unauthorized,
+            Some(p) => {
+                if !p.has_permission(p_str) {
                     LayeCheckResult::Authorized
                 } else {
                     LayeCheckResult::Forbidden
