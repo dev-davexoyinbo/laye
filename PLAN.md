@@ -14,8 +14,9 @@
 
 **What was done:**
 - Deleted `src/main.rs`
-- Created `src/lib.rs` with module declarations for `error`, `principal`, `policy`
-- Created empty stub files: `src/error.rs`, `src/principal.rs`, `src/policy.rs`
+- Deleted `src/main.rs`
+- Created `src/lib.rs` with module declarations for `result`, `principal`, `policy` (originally `error`; renamed to `result` in Stage 3)
+- Created stub files: `src/result.rs`, `src/principal.rs`, `src/policy.rs`
 - Added `description` and `license` fields to `Cargo.toml`
 - No optional dependencies or feature flags added (deferred to their respective stages)
 
@@ -27,27 +28,21 @@
 
 ## Stage 2 — Core Traits and Types ✓ DONE
 
-**Goal:** Define the `Principal` trait and the `LayeError` type. No framework dependencies.
+**Goal:** Define the `Principal` trait and the `LayeCheckResult` type. No framework dependencies.
 
-**Files:** `src/error.rs`, `src/principal.rs`
+**Files:** `src/result.rs`, `src/principal.rs`
 
 **What was done:**
-- Added `thiserror = "2"` to `Cargo.toml`
-- Implemented `LayeError` enum in `src/error.rs` (renamed from `AccessError` during implementation)
+- Implemented `LayeCheckResult` enum in `src/result.rs` (originally `LayeError` in `src/error.rs`; renamed and restructured in Stage 3)
 - Implemented `Principal` trait in `src/principal.rs` — object-safe, no generics
 - Created `tests/principal.rs` with 8 passing tests, all asserts include failure messages
 
-### `src/error.rs`
+### `src/result.rs`
 ```rust
-use thiserror::Error;
-
-#[derive(Debug, Clone, Error)]
-pub enum LayeError {
-    /// Maps to HTTP 401.
-    #[error("Unauthorized")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LayeCheckResult {
+    Authorized,
     Unauthorized,
-    /// Maps to HTTP 403.
-    #[error("Forbidden")]
     Forbidden,
 }
 ```
@@ -91,13 +86,30 @@ dyn_principal_coercion_compiles   // &user as &dyn Principal — verifies object
 
 ---
 
-## Stage 3 — Policy / Condition System
+## Stage 3 — Policy / Condition System ✓ DONE
 
 **Goal:** Composable AND/OR access rules with support for nesting. No framework dependencies.
 
-**File:** `src/policy.rs`
+**Files:** `src/result.rs`, `src/policy.rs`
 
-### `AccessRule`
+**What was done:**
+- Replaced `LayeError` with `LayeCheckResult` in `src/result.rs` — a plain enum (no `thiserror`) with three variants; `src/error.rs` was renamed to `src/result.rs` and the module updated accordingly
+- Implemented `AccessRule`, `AccessPolicy`, and internal `PolicyCheck`/`PolicyMode` types in `src/policy.rs`
+- `check()` returns `LayeCheckResult` directly, not `Result<(), _>`
+- Created `tests/policy.rs` with 21 passing tests
+- `thiserror` dependency removed from `Cargo.toml` (zero dependencies in core)
+
+### `src/result.rs`
+```rust
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LayeCheckResult {
+    Authorized,
+    Unauthorized,
+    Forbidden,
+}
+```
+
+### `src/policy.rs`
 ```rust
 pub type CustomFn = Arc<dyn Fn(Option<&dyn Principal>) -> bool + Send + Sync>;
 
@@ -106,13 +118,10 @@ pub enum AccessRule {
     Role(String),
     Permission(String),
     Authenticated,
-    Guest,          // passes for None OR principal.is_authenticated() == false
+    Guest,   // passes for None OR is_authenticated() == false
     Custom(CustomFn),
 }
-```
 
-### `AccessPolicy`
-```rust
 #[derive(Clone)]
 pub struct AccessPolicy {
     checks: Vec<PolicyCheck>,   // Rule | Nested(AccessPolicy)
@@ -120,19 +129,24 @@ pub struct AccessPolicy {
 }
 
 impl AccessPolicy {
-    pub fn require_all() -> Self { ... }     // AND
-    pub fn require_any() -> Self { ... }     // OR
+    pub fn require_all() -> Self { ... }
+    pub fn require_any() -> Self { ... }
     pub fn add_rule(self, rule: AccessRule) -> Self { ... }
     pub fn add_policy(self, policy: AccessPolicy) -> Self { ... }
-
-    /// Returns Ok(()) on pass.
-    /// Returns Err(Unauthorized) when principal is None and auth is needed.
-    /// Returns Err(Forbidden) when principal exists but check fails.
-    pub fn check(&self, principal: Option<&dyn Principal>) -> Result<(), AccessError> { ... }
+    pub fn check(&self, principal: Option<&dyn Principal>) -> LayeCheckResult { ... }
 }
 ```
 
-**`check` 401/403 split:** if the policy fails and `principal.is_none()`, return `Unauthorized`; otherwise `Forbidden`.
+**`check` result rules:**
+| Situation | Result |
+|-----------|--------|
+| Rule passes | `Authorized` |
+| `principal` is `None` and auth needed | `Unauthorized` |
+| Principal present but lacks role/permission | `Forbidden` |
+| `Authenticated` rule, principal exists but `is_authenticated()` is false | `Unauthorized` |
+| `Guest` rule, principal is authenticated | `Forbidden` |
+| `require_any`, all checks fail, principal present | `Forbidden` |
+| `require_any`, all checks fail, no principal | `Unauthorized` |
 
 **Ergonomic helpers on `AccessPolicy`** (gated, live in `src/policy.rs`):
 ```rust
@@ -145,50 +159,50 @@ pub fn into_tower_layer<P: Principal + Clone + Send + Sync + 'static>(self) -> t
 
 ### Stage 3 Tests
 
-**File:** `tests/policy.rs`
+**File:** `tests/policy.rs` — 21 tests, all passing
 
-```rust
-// Uses the same TestUser helper from Stage 2
-
+```
 // AccessRule::Role
-#[test] fn role_rule_passes_for_matching_role()
-#[test] fn role_rule_fails_for_wrong_role()
-#[test] fn role_rule_fails_for_unauthenticated_returns_unauthorized()
+role_rule_passes_for_matching_role
+role_rule_fails_for_wrong_role
+role_rule_fails_for_unauthenticated_returns_unauthorized
 
 // AccessRule::Permission
-#[test] fn permission_rule_passes_for_matching_permission()
-#[test] fn permission_rule_fails_for_wrong_permission()
+permission_rule_passes_for_matching_permission
+permission_rule_fails_for_wrong_permission
 
 // AccessRule::Authenticated
-#[test] fn authenticated_rule_passes_for_authenticated_principal()
-#[test] fn authenticated_rule_fails_returning_unauthorized_for_none()
-#[test] fn authenticated_rule_fails_returning_forbidden_for_unauthenticated_principal()
+authenticated_rule_passes_for_authenticated_principal
+authenticated_rule_fails_returning_unauthorized_for_none
+authenticated_rule_fails_returning_unauthenticated_for_unauthenticated_principal
 
 // AccessRule::Guest
-#[test] fn guest_rule_passes_for_none()
-#[test] fn guest_rule_passes_for_unauthenticated_principal()
-#[test] fn guest_rule_fails_for_authenticated_principal()
+guest_rule_passes_for_none
+guest_rule_passes_for_unauthenticated_principal
+guest_rule_fails_for_authenticated_principal
 
 // AccessRule::Custom
-#[test] fn custom_rule_delegates_to_closure()
-#[test] fn custom_rule_receives_none_for_missing_principal()
+custom_rule_delegates_to_closure
+custom_rule_receives_none_for_missing_principal
 
 // AccessPolicy AND mode
-#[test] fn require_all_passes_when_all_rules_pass()
-#[test] fn require_all_fails_when_any_rule_fails()
+require_all_passes_when_all_rules_pass
+require_all_fails_when_any_rule_fails
 
 // AccessPolicy OR mode
-#[test] fn require_any_passes_when_one_rule_passes()
-#[test] fn require_any_fails_when_all_rules_fail()
+require_any_passes_when_one_rule_passes
+require_any_fails_when_all_rules_fail
 
 // Nesting
-#[test] fn nested_policy_and_of_or_passes()
-#[test] fn nested_policy_or_of_and_fails_correctly()
+nested_policy_and_of_or_passes
+nested_policy_or_of_and_fails_correctly
 
-// 401 vs 403 distinction
-#[test] fn unauthenticated_request_yields_unauthorized_not_forbidden()
-#[test] fn authenticated_without_role_yields_forbidden_not_unauthorized()
+// Unauthorized vs Forbidden distinction
+unauthenticated_request_yields_unauthorized_not_forbidden
+authenticated_without_role_yields_forbidden_not_unauthorized
 ```
+
+**`cargo check` and `cargo test` pass. 29 total tests (8 + 21).**
 
 ---
 
