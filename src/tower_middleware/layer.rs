@@ -8,6 +8,13 @@ use tower::{Layer, Service};
 
 use crate::{policy::AccessPolicy, principal::Principal, result::LayeCheckResult};
 
+/// tower `Layer` that enforces an [`AccessPolicy`](crate::AccessPolicy) on every request.
+///
+/// Produced by [`AccessPolicy::into_tower_layer`](crate::AccessPolicy::into_tower_layer).
+/// Apply it to an axum route or any tower service with `.layer(layer)`.
+///
+/// Requests are short-circuited with **401** when no principal is found in extensions, or
+/// **403** when the principal fails the policy. The inner service is not called in either case.
 #[derive(Clone)]
 pub struct AccessControlLayer<P> {
     policy: AccessPolicy,
@@ -15,6 +22,7 @@ pub struct AccessControlLayer<P> {
 }
 
 impl<P> AccessControlLayer<P> {
+    /// Creates a new layer wrapping `policy`.
     pub fn new(policy: AccessPolicy) -> Self {
         Self {
             policy,
@@ -35,6 +43,11 @@ impl<S, P> Layer<S> for AccessControlLayer<P> {
     }
 }
 
+/// tower `Service` produced by [`AccessControlLayer`].
+///
+/// You do not construct this directly — it is returned by [`AccessControlLayer`]'s `Layer` impl.
+/// `ResBody: Default` is required so rejection responses can be constructed without invoking
+/// the inner service.
 #[derive(Clone)]
 pub struct AccessControlService<S, P> {
     inner: S,

@@ -11,12 +11,17 @@ use crate::policy::AccessPolicy;
 use crate::principal::Principal;
 use crate::result::LayeCheckResult;
 
+/// actix-web `Transform` factory that enforces an [`AccessPolicy`](crate::AccessPolicy).
+///
+/// Produced by [`AccessPolicy::into_actix_middleware`](crate::AccessPolicy::into_actix_middleware).
+/// Apply it to an `App` or `Scope` via `.wrap(factory)`.
 pub struct PolicyMiddlewareFactory<P> {
     policy: AccessPolicy,
     _marker: PhantomData<P>,
 }
 
 impl<P> PolicyMiddlewareFactory<P> {
+    /// Creates a new factory wrapping `policy`.
     pub fn new(policy: AccessPolicy) -> Self {
         Self {
             policy,
