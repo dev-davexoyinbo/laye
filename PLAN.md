@@ -322,86 +322,95 @@ not_permission_blocks_user_with_restricted_permission
 
 ---
 
-## Stage 5 — tower Middleware Helper (`feature = "tower"`)
+## Stage 5 — tower Middleware Helper (`feature = "tower"`) ✓ DONE
 
 **Goal:** A `tower::Layer` + `tower::Service` that enforces an `AccessPolicy`, compatible with axum and any tower-based framework.
 
 **Files:** `src/tower_middleware/mod.rs`, `src/tower_middleware/layer.rs`
 
+**What was done:**
+- Implemented `AccessControlLayer<P>` and `AccessControlService<S, P>` in `src/tower_middleware/layer.rs`
+- Re-exported from `src/tower_middleware/mod.rs`
+- Added `into_tower_layer<P>()` convenience method on `AccessPolicy` (gated on `#[cfg(feature = "tower")]`)
+- Added `tower`, `http`, `futures-util` optional deps; `axum` + `tokio` dev-deps
+- Created `tests/tower_middleware.rs` with 7 passing tests
+
 ### `AccessControlLayer<P>` + `AccessControlService<S, P>`
+
 ```rust
 #[derive(Clone)]
 pub struct AccessControlLayer<P> {
     policy: AccessPolicy,
-    _marker: PhantomData<fn(P)>,   // fn(P) = covariant + Send+Sync without P bound on struct
+    _marker: PhantomData<fn(P)>,   // fn(P) → Send+Sync without P bound on struct
 }
 
 impl<S, P> Layer<S> for AccessControlLayer<P> {
     type Service = AccessControlService<S, P>;
     fn layer(&self, inner: S) -> Self::Service { ... }
 }
+
+#[derive(Clone)]
+pub struct AccessControlService<S, P> {
+    inner: S,
+    policy: AccessPolicy,
+    _marker: PhantomData<fn(P)>,
+}
 ```
 
 ### `Service::call` flow
-1. Extract `P` from `req.extensions()` (axum inserts into `http::Request` extensions)
-2. Call `policy.check(principal.as_deref())`
-3. `Ok` → pin the inner service future
-4. `Err` → short-circuit with `Response` at `StatusCode::UNAUTHORIZED` or `FORBIDDEN`
+1. Extract `P` from `req.extensions().get::<P>().cloned()`
+2. Call `policy.check(principal.as_ref().map(|p| p as &dyn Principal))`
+3. `Authorized`   → `Either::Left(self.inner.call(req))`
+4. `Unauthorized` → `Either::Right(ready(Ok(401 response)))`
+5. `Forbidden`    → `Either::Right(ready(Ok(403 response)))`
 
-### Future type
+### Future type — no pin-project
+
 ```rust
-pin_project! {
-    pub enum AccessControlFuture<F, B> {
-        Inner   { #[pin] future: F },
-        Rejected { status: StatusCode, _body: PhantomData<B> },
-    }
-}
+// Service::Future = futures_util::future::Either<S::Future, Ready<Result<Response<ResBody>, S::Error>>>
 ```
+
+Both arms share the same `Output`, so `Either` implements `Future` directly. No `pin-project` needed.
 
 `ResBody: Default` is required to construct the rejection response body (`axum::body::Body` satisfies this).
 
 **Design notes:**
-- No `axum` dep in this stage — tower `Layer`/`Service` + `http` crate are sufficient. An optional `axum` feature for `FromRequestParts` extractors can be added later.
-- `fn(P)` in PhantomData makes the layer `Send + Sync` without constraining `P`.
-- actix and tower implementations are independent — do not attempt to unify them.
+- `P: Principal + Clone + Send + Sync + 'static` required by `http::Extensions::get` (`Send + Sync` enforced at the `Service` impl, not the layer struct).
+- `fn(P)` in `PhantomData` makes the layer and service `Send + Sync` without constraining `P` on the struct definition.
+- No `axum` dep in the library — `tower`, `http`, `futures-util` are sufficient. `axum` is only a dev-dependency for tests.
+- actix and tower implementations are independent — not unified.
+- `tower 0.5` + `http 1` (not 0.2).
 
 ### Stage 5 Tests
 
-**File:** `tests/tower_middleware.rs` (requires `#[cfg(feature = "tower")]`)
+**File:** `tests/tower_middleware.rs` — 7 tests, all passing (requires `#[cfg(feature = "tower")]`)
 
-Uses `tower::ServiceExt` + `tower_test` / hand-rolled mock service to drive requests.
+Uses `axum::Router` + `.layer()` + `tower::ServiceExt::oneshot()`. `TestUser` is inserted into request extensions before `oneshot`. Inner service short-circuit verified via `Arc<AtomicBool>` in the handler.
 
-```rust
-// Helper: build a tower ServiceBuilder stack with AccessControlLayer + a mock inner service
-// that returns 200 OK with an empty body.
-// Requests carry http::Extensions with an optional TestUser inserted.
-
-#[tokio::test]
-async fn layer_allows_request_when_policy_passes()
-// → extension has admin, Role("admin") policy, inner service called, 200
-
-#[tokio::test]
-async fn layer_returns_403_when_role_missing()
-// → extension has non-admin user, 403, inner service NOT called
-
-#[tokio::test]
-async fn layer_returns_401_when_no_principal_in_extensions()
-// → no extension, Authenticated policy, 401
-
-#[tokio::test]
-async fn layer_short_circuits_without_calling_inner_service_on_rejection()
-// → verify inner service call count stays at 0 when rejected
-
-#[tokio::test]
-async fn and_policy_blocks_when_one_condition_fails()
-
-#[tokio::test]
-async fn or_policy_allows_when_one_condition_passes()
-
-#[tokio::test]
-async fn layer_is_clone_and_send()
-// compile-time: fn assert_send<T: Send>(_: T) {} called on the layer
 ```
+layer_allows_request_when_policy_passes
+// → admin + Role("admin") → 200
+
+layer_returns_403_when_role_missing
+// → user with no roles + Role("admin") → 403
+
+layer_returns_401_when_no_principal_in_extensions
+// → no extension + Authenticated → 401
+
+layer_short_circuits_without_calling_inner_service_on_rejection
+// → Arc<AtomicBool> flag in handler stays false when 401 returned
+
+and_policy_blocks_when_one_condition_fails
+// → Authenticated + Role("admin"), user has "user" only → 403
+
+or_policy_allows_when_one_condition_passes
+// → Role("admin") | Role("editor"), user has "editor" → 200
+
+layer_is_clone_and_send
+// compile-time: assert_send(layer.clone()); assert_clone(layer)
+```
+
+**`cargo test --features tower` passes. `cargo test --all-features` passes. 55 total tests (8 + 27 + 13 + 7).**
 
 ---
 
