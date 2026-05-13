@@ -2,8 +2,31 @@
 name = "laye"
 version = "0.1.0"
 edition = "2024"
+readme = "README.md"
 description = "A framework-agnostic role and permission based access control library"
 license = "MIT"
+categories = ["authentication", "web-programming"]
+keywords = [
+  "rbac",
+  "access-control",
+  "authorization",
+  "permissions",
+  "roles",
+]
+authors = ["Oyinbo David Bayode <dev.davexoyinbo@gmail.com>"]
+documentation = "https://docs.rs/laye"
+repository = "https://github.com/dev-davexoyinbo/laye"
+exclude = [".github", "Makefile"]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+# opt-level = 3
+# opt-level = "z"
+# opt-level = "s"
+opt-level = 3
+# strip = "debuginfo"
+strip = "symbols"
 
 [features]
 default = []
