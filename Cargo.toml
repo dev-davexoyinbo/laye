@@ -40,5 +40,18 @@ http        = { version = "1",   optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }
-axum  = "0.8"
+tokio     = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net"] }
+axum      = "0.8"
+actix-web = "4"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "actix_web_example"
+required-features = ["actix-web"]
+
+[[example]]
+name = "axum_example"
+required-features = ["tower"]
