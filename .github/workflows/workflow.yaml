@@ -1,4 +1,4 @@
-name: Redis Rate Limiter Tests
+name: Laye CI
 
 on:
   pull_request:
