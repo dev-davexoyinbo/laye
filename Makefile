@@ -10,3 +10,4 @@ help: ## Show available commands
 test: ## Run tests
 	cargo test; \
 	cargo test --features actix-web
+	cargo test --features tower

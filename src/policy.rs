@@ -87,6 +87,14 @@ impl AccessPolicy {
         }
     }
 
+    #[cfg(feature = "tower")]
+    pub fn into_tower_layer<P>(self) -> crate::tower_middleware::AccessControlLayer<P>
+    where
+        P: crate::principal::Principal + Clone + 'static,
+    {
+        crate::tower_middleware::AccessControlLayer::new(self)
+    }
+
     #[cfg(feature = "actix-web")]
     pub fn into_actix_middleware<P>(self) -> crate::actix::PolicyMiddlewareFactory<P>
     where
