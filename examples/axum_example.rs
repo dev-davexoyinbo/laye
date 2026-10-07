@@ -1,6 +1,8 @@
 use axum::{Router, middleware, response::IntoResponse, routing::get};
+use bytes::Bytes;
+use http::{Response, StatusCode, header};
 use laye::principal::Principal;
-use laye::{AccessPolicy, AccessRule};
+use laye::{AccessPolicy, AccessRule, LayeDenial};
 
 #[derive(Clone, Debug)]
 struct MyUser {
@@ -22,10 +24,7 @@ impl Principal for MyUser {
 
 // Step 1: Your auth middleware — decode the token and insert the principal.
 // Without this step every guarded request returns 401, regardless of headers sent.
-async fn load_user(
-    mut req: axum::extract::Request,
-    next: middleware::Next,
-) -> impl IntoResponse {
+async fn load_user(mut req: axum::extract::Request, next: middleware::Next) -> impl IntoResponse {
     req.extensions_mut().insert(MyUser {
         roles: vec!["admin".to_string()],
         permissions: vec!["posts:write".to_string()],
@@ -52,7 +51,24 @@ async fn main() {
         // Step 2: laye checks the policy against the inserted principal.
         .route(
             "/admin",
-            get(admin_handler).layer(admin_policy.into_tower_layer::<MyUser>()),
+            get(admin_handler).layer(
+                admin_policy
+                    .into_tower_layer::<MyUser>()
+                    // Optional: render denials with your API's own body shape instead of
+                    // the default empty 401/403.
+                    .error_handler(|denial| {
+                        let (status, message) = match denial {
+                            LayeDenial::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized"),
+                            LayeDenial::Forbidden => (StatusCode::FORBIDDEN, "Forbidden"),
+                        };
+
+                        Response::builder()
+                            .status(status)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Bytes::from(format!("{{\"message\":\"{message}\"}}")))
+                            .expect("valid response")
+                    }),
+            ),
         )
         .layer(middleware::from_fn(load_user));
 

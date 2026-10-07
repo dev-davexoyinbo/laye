@@ -1,12 +1,17 @@
 use std::future::ready;
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use bytes::Bytes;
 use futures_util::future::Either;
 use http::{Request, Response, StatusCode};
 use tower::{Layer, Service};
 
+use crate::result::LayeDenial;
 use crate::{policy::AccessPolicy, principal::Principal, result::LayeCheckResult};
+
+type ErrorHandler = Arc<dyn Fn(LayeDenial) -> Response<Bytes> + Send + Sync>;
 
 /// tower `Layer` that enforces an [`AccessPolicy`](crate::AccessPolicy) on every request.
 ///
@@ -18,6 +23,7 @@ use crate::{policy::AccessPolicy, principal::Principal, result::LayeCheckResult}
 #[derive(Clone)]
 pub struct AccessControlLayer<P> {
     policy: AccessPolicy,
+    error_handler: Option<ErrorHandler>,
     _marker: PhantomData<fn(P)>,
 }
 
@@ -26,8 +32,52 @@ impl<P> AccessControlLayer<P> {
     pub fn new(policy: AccessPolicy) -> Self {
         Self {
             policy,
+            error_handler: None,
             _marker: PhantomData,
         }
+    }
+
+    /// Build denial responses yourself instead of the default empty `401`/`403`, so they carry
+    /// the same body shape as the rest of your API. The response's body bytes are converted
+    /// into the service's body type through `ResBody: From<Bytes>`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bytes::Bytes;
+    /// use http::{Response, StatusCode, header};
+    /// use laye::{AccessPolicy, AccessRule, LayeDenial};
+    ///
+    /// let layer = AccessPolicy::require_all()
+    ///     .add_rule(AccessRule::Authenticated)
+    ///     .into_tower_layer::<MyUser>()
+    ///     .error_handler(|denial| {
+    ///         let (status, message) = match denial {
+    ///             LayeDenial::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized"),
+    ///             LayeDenial::Forbidden => (StatusCode::FORBIDDEN, "Forbidden"),
+    ///         };
+    ///
+    ///         Response::builder()
+    ///             .status(status)
+    ///             .header(header::CONTENT_TYPE, "application/json")
+    ///             .body(Bytes::from(format!("{{\"message\":\"{message}\"}}")))
+    ///             .expect("valid response")
+    ///     });
+    /// # #[derive(Clone)]
+    /// # struct MyUser { roles: Vec<String>, permissions: Vec<String> }
+    /// # impl laye::Principal for MyUser {
+    /// #     fn roles(&self) -> &[String] { &self.roles }
+    /// #     fn permissions(&self) -> &[String] { &self.permissions }
+    /// #     fn is_authenticated(&self) -> bool { true }
+    /// # }
+    /// # let _ = layer;
+    /// ```
+    pub fn error_handler<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(LayeDenial) -> Response<Bytes> + Send + Sync + 'static,
+    {
+        self.error_handler = Some(Arc::new(handler));
+        self
     }
 }
 
@@ -38,6 +88,7 @@ impl<S, P> Layer<S> for AccessControlLayer<P> {
         AccessControlService {
             inner,
             policy: self.policy.clone(),
+            error_handler: self.error_handler.clone(),
             _marker: PhantomData,
         }
     }
@@ -52,6 +103,7 @@ impl<S, P> Layer<S> for AccessControlLayer<P> {
 pub struct AccessControlService<S, P> {
     inner: S,
     policy: AccessPolicy,
+    error_handler: Option<ErrorHandler>,
     _marker: PhantomData<fn(P)>,
 }
 
@@ -59,7 +111,7 @@ impl<S, P, ReqBody, ResBody> Service<Request<ReqBody>> for AccessControlService<
 where
     S: Service<Request<ReqBody>, Response = Response<ResBody>>,
     P: Principal + Clone + Send + Sync + 'static,
-    ResBody: Default,
+    ResBody: Default + From<Bytes>,
 {
     type Response = Response<ResBody>;
     type Error = S::Error;
@@ -75,18 +127,26 @@ where
             .policy
             .check(principal.as_ref().map(|p| p as &dyn Principal));
 
-        match result {
-            LayeCheckResult::Authorized => Either::Left(self.inner.call(req)),
-            LayeCheckResult::Unauthorized => {
-                let mut res = Response::new(ResBody::default());
-                *res.status_mut() = StatusCode::UNAUTHORIZED;
-                Either::Right(ready(Ok(res)))
-            }
-            LayeCheckResult::Forbidden => {
-                let mut res = Response::new(ResBody::default());
-                *res.status_mut() = StatusCode::FORBIDDEN;
-                Either::Right(ready(Ok(res)))
-            }
+        let denial = match result {
+            LayeCheckResult::Authorized => return Either::Left(self.inner.call(req)),
+            LayeCheckResult::Unauthorized => LayeDenial::Unauthorized,
+            LayeCheckResult::Forbidden => LayeDenial::Forbidden,
+        };
+
+        // A registered error handler builds the denial response; only its body bytes are
+        // converted into the service's body type.
+        if let Some(handler) = &self.error_handler {
+            let (parts, body) = handler(denial).into_parts();
+
+            return Either::Right(ready(Ok(Response::from_parts(parts, ResBody::from(body)))));
         }
+
+        let mut res = Response::new(ResBody::default());
+        *res.status_mut() = match denial {
+            LayeDenial::Unauthorized => StatusCode::UNAUTHORIZED,
+            LayeDenial::Forbidden => StatusCode::FORBIDDEN,
+        };
+
+        Either::Right(ready(Ok(res)))
     }
 }

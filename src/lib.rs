@@ -9,7 +9,7 @@ pub mod policy;
 /// The [`Principal`] trait.
 pub mod principal;
 
-/// The [`LayeCheckResult`] type.
+/// The [`LayeCheckResult`] and [`LayeDenial`] types.
 pub mod result;
 
 #[cfg(feature = "actix-web")]
@@ -22,4 +22,4 @@ pub mod tower_middleware;
 
 pub use policy::{AccessPolicy, AccessRule};
 pub use principal::Principal;
-pub use result::LayeCheckResult;
+pub use result::{LayeCheckResult, LayeDenial};

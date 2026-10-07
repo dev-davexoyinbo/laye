@@ -7,7 +7,7 @@ querying the database — is entirely outside `laye`'s scope.
 
 | Feature | What it adds |
 |---------|-------------|
-| `actix-web` | [`actix`](crate::actix) module: `PolicyMiddlewareFactory`, `AuthPrincipal`, `MaybeAuthPrincipal` |
+| `actix-web` | [`actix`](crate::actix) module: `PolicyMiddlewareFactory`, `AuthPrincipal`, `MaybeAuthPrincipal`, `LayeConfig` |
 | `tower` | [`tower_middleware`](crate::tower_middleware) module: `AccessControlLayer` |
 
 ## How it works
@@ -19,7 +19,10 @@ querying the database — is entirely outside `laye`'s scope.
    - axum / tower: `req.extensions_mut().insert(my_user)`
 4. **Apply a `laye` middleware / layer.** It reads `P` from extensions and calls [`AccessPolicy::check`].
    If no principal is found the request is rejected with **401 Unauthorized**; if the principal
-   fails the policy it is rejected with **403 Forbidden**.
+   fails the policy it is rejected with **403 Forbidden**. To render denials with your API's
+   own body shape instead, register a [`LayeConfig`](crate::actix::LayeConfig) with
+   `App::app_data` on actix-web, or build the tower layer with
+   [`error_handler`](crate::tower_middleware::AccessControlLayer::error_handler).
 
 ## Quick start
 

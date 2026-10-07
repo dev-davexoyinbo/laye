@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use axum::{body::Body, routing::get, Router};
+use axum::{Router, body::Body, routing::get};
 use http::{Request, StatusCode};
 use tower::ServiceExt;
 
@@ -46,10 +46,7 @@ fn make_app(policy: AccessPolicy) -> Router {
 }
 
 fn make_req(user: Option<TestUser>) -> Request<Body> {
-    let mut req = Request::builder()
-        .uri("/")
-        .body(Body::empty())
-        .unwrap();
+    let mut req = Request::builder().uri("/").body(Body::empty()).unwrap();
     if let Some(u) = user {
         req.extensions_mut().insert(u);
     }
@@ -73,17 +70,22 @@ async fn layer_returns_403_when_role_missing() {
         .oneshot(make_req(Some(TestUser::new(&[]))))
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::FORBIDDEN, "missing role should get 403");
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "missing role should get 403"
+    );
 }
 
 #[tokio::test]
 async fn layer_returns_401_when_no_principal_in_extensions() {
     let policy = AccessPolicy::require_all().add_rule(AccessRule::Authenticated);
-    let res = make_app(policy)
-        .oneshot(make_req(None))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "no principal should get 401");
+    let res = make_app(policy).oneshot(make_req(None)).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "no principal should get 401"
+    );
 }
 
 #[tokio::test]
@@ -103,8 +105,15 @@ async fn layer_short_circuits_without_calling_inner_service_on_rejection() {
         .layer(policy.into_tower_layer::<TestUser>());
 
     let res = app.oneshot(make_req(None)).await.unwrap();
-    assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "no principal should get 401");
-    assert!(!called.load(Ordering::SeqCst), "handler should not have been called");
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "no principal should get 401"
+    );
+    assert!(
+        !called.load(Ordering::SeqCst),
+        "handler should not have been called"
+    );
 }
 
 #[tokio::test]
@@ -116,7 +125,11 @@ async fn and_policy_blocks_when_one_condition_fails() {
         .oneshot(make_req(Some(TestUser::new(&["user"]))))
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::FORBIDDEN, "AND policy should block when role fails");
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "AND policy should block when role fails"
+    );
 }
 
 #[tokio::test]
@@ -128,7 +141,11 @@ async fn or_policy_allows_when_one_condition_passes() {
         .oneshot(make_req(Some(TestUser::new(&["editor"]))))
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::OK, "OR policy should allow when one role matches");
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "OR policy should allow when one role matches"
+    );
 }
 
 #[tokio::test]
@@ -140,4 +157,68 @@ async fn layer_is_clone_and_send() {
     let layer = policy.into_tower_layer::<TestUser>();
     assert_send(layer.clone());
     assert_clone(layer);
+}
+
+fn json_denial_app(policy: AccessPolicy) -> Router {
+    Router::new().route("/", get(|| async { "ok" })).layer(
+        policy
+            .into_tower_layer::<TestUser>()
+            .error_handler(|denial| {
+                let (status, message) = match denial {
+                    laye::LayeDenial::Unauthorized => (StatusCode::UNAUTHORIZED, "who are you"),
+                    laye::LayeDenial::Forbidden => (StatusCode::FORBIDDEN, "not for you"),
+                };
+
+                http::Response::builder()
+                    .status(status)
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(bytes::Bytes::from(format!("{{\"message\":\"{message}\"}}")))
+                    .unwrap()
+            }),
+    )
+}
+
+async fn body_string(res: axum::response::Response) -> String {
+    let bytes = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
+    String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+#[tokio::test]
+async fn layer_renders_unauthorized_through_the_error_handler() {
+    let policy = AccessPolicy::require_all().add_rule(AccessRule::Authenticated);
+    let res = json_denial_app(policy)
+        .oneshot(make_req(None))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        res.headers()[http::header::CONTENT_TYPE],
+        "application/json"
+    );
+    assert_eq!(body_string(res).await, "{\"message\":\"who are you\"}");
+}
+
+#[tokio::test]
+async fn layer_renders_forbidden_through_the_error_handler() {
+    let policy = AccessPolicy::require_all().add_rule(AccessRule::Role("admin".into()));
+    let res = json_denial_app(policy)
+        .oneshot(make_req(Some(TestUser::new(&[]))))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_string(res).await, "{\"message\":\"not for you\"}");
+}
+
+#[tokio::test]
+async fn layer_with_error_handler_still_allows_authorized_requests() {
+    let policy = AccessPolicy::require_all().add_rule(AccessRule::Role("admin".into()));
+    let res = json_denial_app(policy)
+        .oneshot(make_req(Some(TestUser::new(&["admin"]))))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_string(res).await, "ok");
 }

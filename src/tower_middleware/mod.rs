@@ -55,11 +55,18 @@
 //! # }
 //! ```
 //!
-//! ## `ResBody: Default` requirement
+//! ## Error handling
 //!
-//! [`AccessControlService`]'s `Service` impl requires `ResBody: Default` to construct rejection
-//! responses (401 / 403) without calling the inner service. `axum::body::Body` satisfies this.
-//! If you use a custom body type, implement `Default` for it or open an issue.
+//! Denials are empty `401`/`403` responses by default. To give them your API's own body shape,
+//! build the layer with [`AccessControlLayer::error_handler`]: the handler receives a
+//! [`LayeDenial`](crate::LayeDenial) and returns the full denial `Response<Bytes>`.
+//!
+//! ## `ResBody: Default + From<Bytes>` requirement
+//!
+//! [`AccessControlService`]'s `Service` impl requires `ResBody: Default + From<Bytes>` to
+//! construct rejection responses (401 / 403) without calling the inner service.
+//! `axum::body::Body` satisfies both. If you use a custom body type, implement them for it or
+//! open an issue.
 
 mod layer;
 pub use layer::{AccessControlLayer, AccessControlService};

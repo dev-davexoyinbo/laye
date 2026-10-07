@@ -14,18 +14,18 @@ querying the database — is entirely outside `laye`'s scope.
 
 | Feature | What it adds |
 |---------|-------------|
-| `actix-web` | `laye::actix` module: `PolicyMiddlewareFactory`, `AuthPrincipal`, `MaybeAuthPrincipal` |
+| `actix-web` | `laye::actix` module: `PolicyMiddlewareFactory`, `AuthPrincipal`, `MaybeAuthPrincipal`, `LayeConfig` |
 | `tower` | `laye::tower_middleware` module: `AccessControlLayer` |
 
 ```toml
 # Core only
-laye = "0.1"
+laye = "0.2"
 
 # With actix-web support
-laye = { version = "0.1", features = ["actix-web"] }
+laye = { version = "0.2", features = ["actix-web"] }
 
 # With axum / tower support
-laye = { version = "0.1", features = ["tower"] }
+laye = { version = "0.2", features = ["tower"] }
 ```
 
 ## How it works
@@ -35,6 +35,21 @@ laye = { version = "0.1", features = ["tower"] }
 3. **Insert your principal into request extensions** from your own upstream auth middleware — *before* `laye` runs.
 4. **Apply a `laye` middleware / layer.** It reads `P` from extensions and evaluates the policy,
    returning **401 Unauthorized** when no principal is found or **403 Forbidden** when the principal fails the policy.
+   To render denials through your own error type instead of the default empty responses, register a `LayeConfig`
+   with an `error_handler` via `App::app_data`, the way actix-web's `JsonConfig` works:
+
+   ```rust,ignore
+   let laye_config = LayeConfig::default().error_handler(|denial, _req| {
+       let (message, status) = match denial {
+           LayeDenial::Unauthorized => ("Unauthorized", StatusCode::UNAUTHORIZED),
+           LayeDenial::Forbidden => ("Forbidden", StatusCode::FORBIDDEN),
+       };
+
+       MyApiError::new(message, status).into() // any ResponseError
+   });
+
+   App::new().app_data(laye_config.clone()) // ...
+   ```
 
 ## Quick start
 
@@ -82,7 +97,7 @@ assert_eq!(policy.check(None),          LayeCheckResult::Unauthorized);
 ## actix-web integration
 
 ```toml
-laye = { version = "0.1", features = ["actix-web"] }
+laye = { version = "0.2", features = ["actix-web"] }
 ```
 
 ```rust
@@ -142,7 +157,7 @@ async fn main() -> std::io::Result<()> {
 ## axum / tower integration
 
 ```toml
-laye = { version = "0.1", features = ["tower"] }
+laye = { version = "0.2", features = ["tower"] }
 ```
 
 ```rust
@@ -186,6 +201,8 @@ async fn main() {
             "/admin",
             // Step 2: laye checks the policy against the inserted principal.
             get(admin_handler).layer(policy.into_tower_layer::<MyUser>()),
+            // `.error_handler(|denial| ...)` on the layer renders denials with
+            // your API's own body shape instead of the default empty 401/403.
         )
         .route("/public", get(|| async { "public" }))
         .layer(middleware::from_fn(load_user));

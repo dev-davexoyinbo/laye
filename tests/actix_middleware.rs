@@ -1,8 +1,8 @@
 #![cfg(feature = "actix-web")]
 
 use actix_web::dev::Service;
-use actix_web::test::{call_service, init_service, TestRequest};
-use actix_web::{web, App, HttpMessage, HttpResponse};
+use actix_web::test::{TestRequest, call_service, init_service};
+use actix_web::{App, HttpMessage, HttpResponse, web};
 
 use laye::actix::{AuthPrincipal, MaybeAuthPrincipal};
 use laye::principal::Principal;
@@ -108,14 +108,21 @@ async fn auth_principal_extractor_injects_principal_into_handler() {
             .route(
                 "/",
                 web::get().to(|p: AuthPrincipal<TestUser>| async move {
-                    assert!(p.0.has_role("user"), "extracted user should have 'user' role");
+                    assert!(
+                        p.0.has_role("user"),
+                        "extracted user should have 'user' role"
+                    );
                     HttpResponse::Ok().finish()
                 }),
             ),
     )
     .await;
     let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
-    assert_eq!(res.status(), 200, "handler should receive principal and return 200");
+    assert_eq!(
+        res.status(),
+        200,
+        "handler should receive principal and return 200"
+    );
 }
 
 #[actix_web::test]
@@ -126,13 +133,16 @@ async fn auth_principal_extractor_returns_401_when_missing() {
             .wrap(policy.into_actix_middleware::<TestUser>())
             .route(
                 "/",
-                web::get()
-                    .to(|_: AuthPrincipal<TestUser>| async { HttpResponse::Ok().finish() }),
+                web::get().to(|_: AuthPrincipal<TestUser>| async { HttpResponse::Ok().finish() }),
             ),
     )
     .await;
     let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
-    assert_eq!(res.status(), 401, "missing principal in extractor should return 401");
+    assert_eq!(
+        res.status(),
+        401,
+        "missing principal in extractor should return 401"
+    );
 }
 
 #[actix_web::test]
@@ -149,7 +159,10 @@ async fn maybe_auth_principal_returns_some_when_present() {
             .route(
                 "/",
                 web::get().to(|m: MaybeAuthPrincipal<TestUser>| async move {
-                    assert!(m.0.is_some(), "MaybeAuthPrincipal should be Some when extension present");
+                    assert!(
+                        m.0.is_some(),
+                        "MaybeAuthPrincipal should be Some when extension present"
+                    );
                     HttpResponse::Ok().finish()
                 }),
             ),
@@ -168,14 +181,21 @@ async fn maybe_auth_principal_returns_none_when_absent() {
             .route(
                 "/",
                 web::get().to(|m: MaybeAuthPrincipal<TestUser>| async move {
-                    assert!(m.0.is_none(), "MaybeAuthPrincipal should be None when no extension");
+                    assert!(
+                        m.0.is_none(),
+                        "MaybeAuthPrincipal should be None when no extension"
+                    );
                     HttpResponse::Ok().finish()
                 }),
             ),
     )
     .await;
     let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
-    assert_eq!(res.status(), 200, "guest route with no principal should succeed");
+    assert_eq!(
+        res.status(),
+        200,
+        "guest route with no principal should succeed"
+    );
 }
 
 #[actix_web::test]
@@ -195,7 +215,11 @@ async fn and_policy_blocks_when_one_condition_fails() {
     )
     .await;
     let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
-    assert_eq!(res.status(), 403, "AND policy should block when role condition fails");
+    assert_eq!(
+        res.status(),
+        403,
+        "AND policy should block when role condition fails"
+    );
 }
 
 #[actix_web::test]
@@ -255,7 +279,11 @@ async fn not_permission_allows_user_without_restricted_permission() {
     )
     .await;
     let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
-    assert_eq!(res.status(), 200, "user without delete permission should get 200");
+    assert_eq!(
+        res.status(),
+        200,
+        "user without delete permission should get 200"
+    );
 }
 
 #[actix_web::test]
@@ -275,7 +303,11 @@ async fn not_permission_blocks_user_with_restricted_permission() {
     )
     .await;
     let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
-    assert_eq!(res.status(), 403, "user with delete permission should get 403");
+    assert_eq!(
+        res.status(),
+        403,
+        "user with delete permission should get 403"
+    );
 }
 
 #[actix_web::test]
@@ -295,5 +327,78 @@ async fn or_policy_allows_when_one_condition_passes() {
     )
     .await;
     let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
-    assert_eq!(res.status(), 200, "OR policy should allow when one role matches");
+    assert_eq!(
+        res.status(),
+        200,
+        "OR policy should allow when one role matches"
+    );
+}
+
+/// A `LayeConfig` whose handler renders denials the way an application error type would.
+fn json_error_config() -> laye::actix::LayeConfig {
+    use actix_web::error::InternalError;
+    use actix_web::http::StatusCode;
+    use laye::LayeDenial;
+
+    laye::actix::LayeConfig::default().error_handler(|denial, _req| {
+        let (message, status) = match denial {
+            LayeDenial::Unauthorized => ("who are you", StatusCode::UNAUTHORIZED),
+            LayeDenial::Forbidden => ("not for you", StatusCode::FORBIDDEN),
+        };
+        let response = HttpResponse::build(status)
+            .content_type("application/json")
+            .body(format!("{{\"message\":\"{message}\"}}"));
+
+        InternalError::from_response(message, response).into()
+    })
+}
+
+#[actix_web::test]
+async fn middleware_renders_unauthorized_through_the_config_error_handler() {
+    let policy = AccessPolicy::require_all().add_rule(AccessRule::Authenticated);
+    let app = init_service(
+        App::new()
+            .app_data(json_error_config())
+            .wrap(policy.into_actix_middleware::<TestUser>())
+            .route("/", web::get().to(|| async { HttpResponse::Ok().finish() })),
+    )
+    .await;
+    let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
+    assert_eq!(res.status(), 401);
+    let body = actix_web::test::read_body(res).await;
+    assert_eq!(body, "{\"message\":\"who are you\"}");
+}
+
+#[actix_web::test]
+async fn middleware_renders_forbidden_through_the_config_error_handler() {
+    let policy = AccessPolicy::require_all().add_rule(AccessRule::Role("admin".into()));
+    let user = TestUser::new(&[]);
+    let app = init_service(
+        App::new()
+            .app_data(json_error_config())
+            .wrap(policy.into_actix_middleware::<TestUser>())
+            .wrap_fn(move |req, srv| {
+                req.extensions_mut().insert(user.clone());
+                srv.call(req)
+            })
+            .route("/", web::get().to(|| async { HttpResponse::Ok().finish() })),
+    )
+    .await;
+    let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
+    assert_eq!(res.status(), 403);
+    let body = actix_web::test::read_body(res).await;
+    assert_eq!(body, "{\"message\":\"not for you\"}");
+}
+
+#[actix_web::test]
+async fn auth_principal_extractor_uses_the_config_error_handler() {
+    let app = init_service(App::new().app_data(json_error_config()).route(
+        "/",
+        web::get().to(|_: AuthPrincipal<TestUser>| async { HttpResponse::Ok().finish() }),
+    ))
+    .await;
+    let res = call_service(&app, TestRequest::get().uri("/").to_request()).await;
+    assert_eq!(res.status(), 401);
+    let body = actix_web::test::read_body(res).await;
+    assert_eq!(body, "{\"message\":\"who are you\"}");
 }

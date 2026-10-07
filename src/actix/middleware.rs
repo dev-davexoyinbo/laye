@@ -7,9 +7,11 @@ use actix_web::body::EitherBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
 use actix_web::{HttpMessage, HttpResponse};
 
+use crate::actix::config::error_handler;
 use crate::policy::AccessPolicy;
 use crate::principal::Principal;
 use crate::result::LayeCheckResult;
+use crate::result::LayeDenial;
 
 /// actix-web `Transform` factory that enforces an [`AccessPolicy`](crate::AccessPolicy).
 ///
@@ -79,19 +81,29 @@ where
         let svc = Rc::clone(&self.service);
 
         Box::pin(async move {
-            match result {
+            let denial = match result {
                 LayeCheckResult::Authorized => {
-                    svc.call(req).await.map(ServiceResponse::map_into_left_body)
+                    return svc.call(req).await.map(ServiceResponse::map_into_left_body);
                 }
-                LayeCheckResult::Unauthorized => {
-                    let res = HttpResponse::Unauthorized().finish();
-                    Ok(req.into_response(res).map_into_right_body())
-                }
-                LayeCheckResult::Forbidden => {
-                    let res = HttpResponse::Forbidden().finish();
-                    Ok(req.into_response(res).map_into_right_body())
-                }
+                LayeCheckResult::Unauthorized => LayeDenial::Unauthorized,
+                LayeCheckResult::Forbidden => LayeDenial::Forbidden,
+            };
+
+            // A registered error handler converts the denial, like JsonConfig's, and the
+            // error's `ResponseError` implementation renders it. Rendering here, rather than
+            // returning `Err`, keeps outer middleware such as CORS decorating the response.
+            if let Some(handler) = error_handler(req.request()) {
+                let res = HttpResponse::from_error(handler(denial, req.request()));
+
+                return Ok(req.into_response(res).map_into_right_body());
             }
+
+            let res = match denial {
+                LayeDenial::Unauthorized => HttpResponse::Unauthorized().finish(),
+                LayeDenial::Forbidden => HttpResponse::Forbidden().finish(),
+            };
+
+            Ok(req.into_response(res).map_into_right_body())
         })
     }
 }

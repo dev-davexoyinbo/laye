@@ -1,8 +1,10 @@
 use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpMessage, HttpRequest};
-use std::future::{Ready, ready};
+use std::future::{ready, Ready};
 
+use crate::actix::config::error_handler;
 use crate::principal::Principal;
+use crate::result::LayeDenial;
 
 /// actix-web extractor that resolves a `P: Principal` from request extensions.
 ///
@@ -53,7 +55,11 @@ where
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
         match req.extensions().get::<P>().cloned() {
             Some(p) => ready(Ok(AuthPrincipal(p))),
-            None => ready(Err(actix_web::error::ErrorUnauthorized("Unauthorized"))),
+            // A registered LayeConfig error handler converts the denial (see crate::actix).
+            None => match error_handler(req) {
+                Some(handler) => ready(Err(handler(LayeDenial::Unauthorized, req))),
+                None => ready(Err(actix_web::error::ErrorUnauthorized("Unauthorized"))),
+            },
         }
     }
 }

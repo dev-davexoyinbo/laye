@@ -67,6 +67,14 @@
 //! `FromRequest` bound). The extractor works independently of the `laye` middleware — you can
 //! use it on any route as long as your upstream auth middleware has inserted the principal.
 //!
+//! ## Error handling
+//!
+//! Denials are empty `401`/`403` responses by default, and [`AuthPrincipal`] fails with a plain
+//! `401`. To render them through your own error type instead, register a [`LayeConfig`] once
+//! with `App::app_data`, the way actix-web's `JsonConfig` works: its handler receives the
+//! [`LayeDenial`](crate::LayeDenial) and the request and returns any `actix_web::Error`, whose
+//! `ResponseError` implementation builds the response. See [`LayeConfig`] for an example.
+//!
 //! ## Middleware ordering
 //!
 //! In actix-web, a middleware added with `.wrap()` **later** in the builder wraps around the
@@ -120,8 +128,10 @@
 //! # }
 //! ```
 
+mod config;
 mod extractor;
 mod middleware;
 
+pub use config::LayeConfig;
 pub use extractor::{AuthPrincipal, MaybeAuthPrincipal};
 pub use middleware::PolicyMiddlewareFactory;

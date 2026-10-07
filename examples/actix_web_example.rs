@@ -1,8 +1,10 @@
 use actix_web::dev::Service;
+use actix_web::error::InternalError;
+use actix_web::http::StatusCode;
 use actix_web::{web, App, HttpMessage, HttpResponse, HttpServer};
-use laye::actix::AuthPrincipal;
+use laye::actix::{AuthPrincipal, LayeConfig};
 use laye::principal::Principal;
-use laye::{AccessPolicy, AccessRule};
+use laye::{AccessPolicy, AccessRule, LayeDenial};
 
 #[derive(Clone, Debug)]
 struct MyUser {
@@ -43,6 +45,16 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(move || {
         App::new()
+            // Optional: render denials with your API's own error type instead of the
+            // default empty 401/403.
+            .app_data(LayeConfig::default().error_handler(|denial, _req| {
+                let (message, status) = match denial {
+                    LayeDenial::Unauthorized => ("Unauthorized", StatusCode::UNAUTHORIZED),
+                    LayeDenial::Forbidden => ("Forbidden", StatusCode::FORBIDDEN),
+                };
+
+                InternalError::new(message, status).into()
+            }))
             // Step 1: Your auth middleware — decode the token and insert the principal.
             // Without this step every guarded request returns 401, regardless of headers sent.
             .wrap_fn(|req, srv| {

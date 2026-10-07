@@ -890,10 +890,11 @@ checksum = "d4345964bb142484797b161f473a503a434de77149dd8c7427788c6e13379388"
 
 [[package]]
 name = "laye"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "actix-web",
  "axum",
+ "bytes",
  "futures-util",
  "http 1.4.0",
  "tokio",
